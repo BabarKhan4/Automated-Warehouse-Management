@@ -161,17 +161,17 @@
   (connected zone_6_6 zone_5_6)
  )
 
-   (at-robot r1 zone_0_0)
+   (at-robot r1 zone_0_3)
   (robot-free r1)
-  (at-robot r2 zone_1_1)
+  (at-robot r2 zone_2_3)
   (robot-free r2)
-  (at-package p2 zone_0_0)
+  (at-package p2 zone_0_5)
   (assigned p2 r1)
-  (at-package p3 zone_1_1)
+  (at-package p3 zone_6_5)
   (assigned p3 r2)
 
  (:goal (and
-    (at-package p2 zone_0_0)
-  (at-package p3 zone_1_1)
+    (at-package p2 zone_3_5)
+  (at-package p3 zone_0_6)
  ))
 )

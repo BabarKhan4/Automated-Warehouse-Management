@@ -7,6 +7,7 @@
   (at-package ?p - package ?l - location)
   (carrying ?r - robot ?p - package)
   (robot-free ?r - robot)
+    (assigned ?p - package ?r - robot)
   (connected ?from - location ?to - location)
  )
 
@@ -30,6 +31,7 @@
     (at-robot ?r ?l)
     (at-package ?p ?l)
     (robot-free ?r)
+    (assigned ?p ?r)
   )
   :effect (and
     (not (at-package ?p ?l))

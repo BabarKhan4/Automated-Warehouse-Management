@@ -6,6 +6,8 @@ class Package: # FIX: Uppercase 'P'
         self.destination = destination  # (x, y)
         self.is_carried = False
         self.carrier_id = None
+        # id of robot assigned (string) — set by scenario setup when needed
+        self.assigned_robot_id = None
         self.state = "Waiting"
 
     def __repr__(self):

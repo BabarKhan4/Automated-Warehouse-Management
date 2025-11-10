@@ -1,24 +1,21 @@
-; problem_template.pddl
-; Template containing static objects and connectivity for the default grid.
-; Dynamic robot/package facts and goals will be injected by pddl_generator.extract_state_to_pddl.
-
 (define (problem warehouse-delivery)
  (:domain warehouse)
 
  (:objects
   r1 r2 - robot
   p2 p3 - package
-  zone_0_0 zone_0_1 zone_0_2 zone_0_3 zone_0_4 zone_0_5 zone_0_6 
-  zone_1_0 zone_1_1 zone_1_2 zone_1_3 zone_1_4 zone_1_5 zone_1_6 
-  zone_2_0 zone_2_1 zone_2_2 zone_2_3 zone_2_4 zone_2_5 zone_2_6 
-  zone_3_0 zone_3_1 zone_3_2 zone_3_3 zone_3_4 zone_3_5 zone_3_6 
-  zone_4_0 zone_4_1 zone_4_2 zone_4_3 zone_4_4 zone_4_5 zone_4_6 
-  zone_5_0 zone_5_1 zone_5_2 zone_5_3 zone_5_4 zone_5_5 zone_5_6 
-  zone_6_0 zone_6_1 zone_6_2 zone_6_3 zone_6_4 zone_6_5 zone_6_6 - location
+  zone_0_0 zone_0_1 zone_0_2 zone_0_3 zone_0_4 zone_0_5 zone_0_6 zone_1_0 zone_1_1 zone_1_2 zone_1_3 zone_1_4 zone_1_5 zone_1_6 zone_2_0 zone_2_1 zone_2_2 zone_2_3 zone_2_6 zone_3_0 zone_3_1 zone_3_2 zone_3_3 zone_3_4 zone_3_5 zone_3_6 zone_4_0 zone_4_3 zone_4_4 zone_4_5 zone_4_6 zone_5_0 zone_5_1 zone_5_2 zone_5_3 zone_5_4 zone_5_5 zone_5_6 zone_6_0 zone_6_1 zone_6_2 zone_6_3 zone_6_4 zone_6_5 zone_6_6 - location
  )
 
- ;; STATIC INIT (connectivity and other static facts). Dynamic facts will be injected below.
  (:init
+  (at-robot r1 zone_0_3)
+  (robot-free r1)
+  (at-robot r2 zone_2_3)
+  (robot-free r2)
+  (at-package p2 zone_0_5)
+  (assigned p2 r1)
+  (at-package p3 zone_6_5)
+  (assigned p3 r2)
   (connected zone_0_0 zone_0_1)
   (connected zone_0_0 zone_1_0)
   (connected zone_0_1 zone_0_2)
@@ -55,11 +52,9 @@
   (connected zone_1_3 zone_0_3)
   (connected zone_1_4 zone_1_5)
   (connected zone_1_4 zone_1_3)
-  (connected zone_1_4 zone_2_4)
   (connected zone_1_4 zone_0_4)
   (connected zone_1_5 zone_1_6)
   (connected zone_1_5 zone_1_4)
-  (connected zone_1_5 zone_2_5)
   (connected zone_1_5 zone_0_5)
   (connected zone_1_6 zone_1_5)
   (connected zone_1_6 zone_2_6)
@@ -73,48 +68,49 @@
   (connected zone_2_1 zone_1_1)
   (connected zone_2_2 zone_2_3)
   (connected zone_2_2 zone_2_1)
+  (connected zone_2_2 zone_3_2)
   (connected zone_2_2 zone_1_2)
-  (connected zone_2_3 zone_2_4)
   (connected zone_2_3 zone_2_2)
   (connected zone_2_3 zone_3_3)
   (connected zone_2_3 zone_1_3)
-  (connected zone_2_4 zone_2_5)
-  (connected zone_2_4 zone_2_3)
-  (connected zone_2_4 zone_3_4)
-  (connected zone_2_4 zone_1_4)
-  (connected zone_2_5 zone_2_6)
-  (connected zone_2_5 zone_2_4)
-  (connected zone_2_5 zone_1_5)
-  (connected zone_2_6 zone_2_5)
   (connected zone_2_6 zone_3_6)
   (connected zone_2_6 zone_1_6)
   (connected zone_3_0 zone_3_1)
   (connected zone_3_0 zone_4_0)
   (connected zone_3_0 zone_2_0)
+  (connected zone_3_1 zone_3_2)
   (connected zone_3_1 zone_3_0)
-  (connected zone_3_1 zone_4_1)
   (connected zone_3_1 zone_2_1)
   (connected zone_3_2 zone_3_3)
+  (connected zone_3_2 zone_3_1)
+  (connected zone_3_2 zone_2_2)
   (connected zone_3_3 zone_3_4)
+  (connected zone_3_3 zone_3_2)
   (connected zone_3_3 zone_4_3)
   (connected zone_3_3 zone_2_3)
+  (connected zone_3_4 zone_3_5)
   (connected zone_3_4 zone_3_3)
   (connected zone_3_4 zone_4_4)
-  (connected zone_3_4 zone_2_4)
+  (connected zone_3_5 zone_3_6)
+  (connected zone_3_5 zone_3_4)
+  (connected zone_3_5 zone_4_5)
+  (connected zone_3_6 zone_3_5)
   (connected zone_3_6 zone_4_6)
   (connected zone_3_6 zone_2_6)
-  (connected zone_4_0 zone_4_1)
   (connected zone_4_0 zone_5_0)
   (connected zone_4_0 zone_3_0)
-  (connected zone_4_1 zone_4_0)
-  (connected zone_4_1 zone_5_1)
-  (connected zone_4_1 zone_3_1)
   (connected zone_4_3 zone_4_4)
   (connected zone_4_3 zone_5_3)
   (connected zone_4_3 zone_3_3)
+  (connected zone_4_4 zone_4_5)
   (connected zone_4_4 zone_4_3)
   (connected zone_4_4 zone_5_4)
   (connected zone_4_4 zone_3_4)
+  (connected zone_4_5 zone_4_6)
+  (connected zone_4_5 zone_4_4)
+  (connected zone_4_5 zone_5_5)
+  (connected zone_4_5 zone_3_5)
+  (connected zone_4_6 zone_4_5)
   (connected zone_4_6 zone_5_6)
   (connected zone_4_6 zone_3_6)
   (connected zone_5_0 zone_5_1)
@@ -137,6 +133,7 @@
   (connected zone_5_5 zone_5_6)
   (connected zone_5_5 zone_5_4)
   (connected zone_5_5 zone_6_5)
+  (connected zone_5_5 zone_4_5)
   (connected zone_5_6 zone_5_5)
   (connected zone_5_6 zone_6_6)
   (connected zone_5_6 zone_4_6)
@@ -161,17 +158,8 @@
   (connected zone_6_6 zone_5_6)
  )
 
-   (at-robot r1 zone_0_0)
-  (robot-free r1)
-  (at-robot r2 zone_1_1)
-  (robot-free r2)
-  (at-package p2 zone_0_0)
-  (assigned p2 r1)
-  (at-package p3 zone_1_1)
-  (assigned p3 r2)
-
  (:goal (and
-    (at-package p2 zone_0_0)
-  (at-package p3 zone_1_1)
+  (at-package p2 zone_3_5)
+  (at-package p3 zone_0_6)
  ))
 )

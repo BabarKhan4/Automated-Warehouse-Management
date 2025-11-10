@@ -1,6 +1,7 @@
 # interface.py (formerly gui.py)
 import pygame 
 import time
+import os
 from environment import Environment
 from robot import Robot 
 from package import Package
@@ -62,10 +63,22 @@ class GUI:
 
         for pkg in self.packages:
             dest_x, dest_y = pkg.destination
+            # Don't draw destination marker for already-delivered packages
+            try:
+                if getattr(pkg, 'state', None) == 'Delivered':
+                    continue
+            except Exception:
+                pass
             center_x, center_y = self._get_draw_coords(dest_x, dest_y)
             pygame.draw.circle(self.screen, self.RED, (center_x, center_y), 10, 2)
 
         for pkg in self.packages:
+            # Hide packages that have been delivered
+            try:
+                if getattr(pkg, 'state', None) == 'Delivered':
+                    continue
+            except Exception:
+                pass
             if not pkg.is_carried:
                 x, y = pkg.position
                 center_x, center_y = self._get_draw_coords(x, y)
@@ -131,6 +144,14 @@ class GUI:
                 p = self.packages[0]
                 pkg_text = f"Package {p.id}: {p.position} -> {p.destination} state:{p.state}"
                 self.screen.blit(font.render(pkg_text, True, self.BLACK), (10, info_y2))
+                info_y2 += 20
+            # show whether a problem template is present and being used
+            tpl_path = 'problem_template.pddl'
+            if os.path.exists(tpl_path):
+                tpl_text = f"Template: {tpl_path}"
+            else:
+                tpl_text = "Template: (none)"
+            self.screen.blit(font.render(tpl_text, True, self.BLACK), (10, info_y2))
         except Exception:
             pass
 

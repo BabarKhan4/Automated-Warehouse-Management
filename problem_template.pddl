@@ -161,17 +161,9 @@
   (connected zone_6_6 zone_5_6)
  )
 
-   (at-robot r1 zone_0_0)
-  (robot-free r1)
-  (at-robot r2 zone_1_1)
-  (robot-free r2)
-  (at-package p2 zone_0_0)
-  (assigned p2 r1)
-  (at-package p3 zone_1_1)
-  (assigned p3 r2)
+ ;; DYNAMIC_INIT_MARKER
 
  (:goal (and
-    (at-package p2 zone_0_0)
-  (at-package p3 zone_1_1)
+  ;; DYNAMIC_GOAL_MARKER
  ))
 )
