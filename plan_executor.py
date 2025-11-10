@@ -47,6 +47,8 @@ class PlanExecutor:
         self.robots = {r.id.lower(): r for r in robots}
         self.packages = {p.id.lower(): p for p in packages} 
         self.gui = gui_instance
+        # If True, executor will compute shortest paths per robot instead of following planner moves
+        self.shortest_path_mode = True
 
     def _parse_zone(self, zone_name):
         """Extracts coordinates (x, y) from a zone name like 'zone_2_3'."""
@@ -77,7 +79,11 @@ class PlanExecutor:
                     # Debug: show what keys we have to diagnose mismatches
                     print(f"DEBUG: robot lookup failed for '{robot_id}'. Known robot keys: {list(self.robots.keys())}")
                     raise KeyError(robot_id)
-                from_coords = self._parse_zone(from_zone)
+                # support generated moves where from_zone may be None: use robot.position
+                if from_zone is None:
+                    from_coords = robot.position
+                else:
+                    from_coords = self._parse_zone(from_zone)
                 to_coords = self._parse_zone(to_zone)
 
                 # Runtime check: PDDL plan must be consistent with current state
@@ -119,7 +125,12 @@ class PlanExecutor:
             step_info = f"Step {i+1}/{len(plan)}: ({action} {' '.join(params)})"
             print(step_info)
             if self.gui:
-                self.gui.update_info(f"Executing: {step_info}")
+                    # guard against None in params when formatting
+                    try:
+                        params_str = ' '.join(str(p) for p in params)
+                    except Exception:
+                        params_str = ' '.join(str(p) if p is not None else 'None' for p in params)
+                    self.gui.update_info(f"Executing: {step_info} {params_str}")
 
             success = self.execute_action(action, params)
 
@@ -142,4 +153,216 @@ class PlanExecutor:
             except Exception:
                 pass
             self.gui.update_info("Plan executed successfully! Mission complete.")
+        return True
+
+    def execute_plan_parallel(self, plan, delay=0.5):
+        """Execute plan attempting to run actions for different robots in parallel.
+
+        Strategy:
+        - Build per-robot action queues preserving order from the plan.
+        - At each tick, attempt to schedule one action per robot greedily while
+          avoiding conflicts (same target cell, swapping cells, or same package).
+        - Execute the selected non-conflicting actions together, redraw, and
+          proceed until all queues are empty.
+        """
+        # Build per-robot queues. If shortest_path_mode is enabled, create high-level
+        # queues using shortest paths (move sequences + pickup/drop) based on current
+        # package assignments; otherwise, use the plan as-is (per-robot actions).
+        from collections import deque
+        robot_actions = {rid: deque() for rid in self.robots.keys()}
+
+        if self.shortest_path_mode:
+            # Helper: BFS shortest path on grid avoiding obstacles
+            from collections import deque as _deque
+            def shortest_path(start, goal):
+                if start == goal:
+                    return []
+                q = _deque()
+                q.append(start)
+                prev = {start: None}
+                while q:
+                    cur = q.popleft()
+                    if cur == goal:
+                        break
+                    x, y = cur
+                    for dx, dy in [(0,1),(0,-1),(1,0),(-1,0)]:
+                        nx, ny = x+dx, y+dy
+                        if 0 <= nx < self.environment.width and 0 <= ny < self.environment.height and (nx, ny) not in prev and self.environment.is_valid_position(nx, ny):
+                            prev[(nx, ny)] = cur
+                            q.append((nx, ny))
+                if goal not in prev:
+                    return None
+                # reconstruct path (excluding start)
+                path = []
+                cur = goal
+                while prev[cur] is not None:
+                    path.append(cur)
+                    cur = prev[cur]
+                path.reverse()
+                return path
+
+            # Map packages to their assigned robots
+            pkg_by_robot = {}
+            for pid, p in self.packages.items():
+                assigned = getattr(p, 'assigned_robot_id', None)
+                if assigned:
+                    pkg_by_robot.setdefault(assigned.lower(), []).append(p)
+
+            # For each robot, build a sequence: move->...->pickup->move->...->drop for each assigned package
+            for rid, robot in self.robots.items():
+                assigned_pkgs = pkg_by_robot.get(rid, [])
+                cur_pos = robot.position
+                for p in assigned_pkgs:
+                    # move to package start
+                    path = shortest_path(cur_pos, p.position)
+                    if path is None:
+                        print(f"No path from {cur_pos} to package {p.id} at {p.position}")
+                        return False
+                    # enqueue move actions along path
+                    for step_pos in path:
+                        # convert step_pos to zone string format used by planner actions
+                        zone = f"zone_{step_pos[0]}_{step_pos[1]}"
+                        # create move action parameters: robot, from_zone (we'll fill at exec time), to_zone
+                        robot_actions[rid].append(('move', [rid, None, zone]))
+                    # pickup
+                    zone_str = f"zone_{p.position[0]}_{p.position[1]}"
+                    robot_actions[rid].append(('pickup', [rid, p.id, zone_str]))
+                    cur_pos = p.position
+                    # move to destination
+                    path2 = shortest_path(cur_pos, p.destination)
+                    if path2 is None:
+                        print(f"No path from package {p.id} at {cur_pos} to dest {p.destination}")
+                        return False
+                    for step_pos in path2:
+                        zone = f"zone_{step_pos[0]}_{step_pos[1]}"
+                        robot_actions[rid].append(('move', [rid, None, zone]))
+                    # drop
+                    zone_str = f"zone_{p.destination[0]}_{p.destination[1]}"
+                    robot_actions[rid].append(('drop', [rid, p.id, zone_str]))
+                    cur_pos = p.destination
+
+        else:
+            for action, params in plan:
+                # determine robot id from params (first param is robot for our domain)
+                if not params:
+                    continue
+                rid = params[0].lower()
+                if rid in robot_actions:
+                    robot_actions[rid].append((action, params))
+                else:
+                    # unknown robot referenced in plan -> fail
+                    print(f"Unknown robot in plan: {rid}")
+                    return False
+
+        # helper to peek next action for each robot
+        def peek_actions():
+            return {rid: q[0] for rid, q in robot_actions.items() if q}
+
+        step = 0
+        while any(robot_actions[rid] for rid in robot_actions):
+            step += 1
+            candidates = peek_actions()
+
+            # Greedy selection: iterate robots in sorted order and pick actions that don't conflict
+            selected = {}
+            occupied_targets = set()
+            occupied_sources = {}
+            packages_touched = set()
+
+            for rid in sorted(candidates.keys()):
+                action, params = candidates[rid]
+                act = action.lower()
+                r = self.robots[rid]
+
+                # determine source and target cells for conflict checking
+                src = r.position
+                tgt = None
+                pkg = None
+                if act == 'move':
+                    # params may have None for from_zone when created by shortest-path builder
+                    _, from_zone, to_zone = params
+                    # parse target coords
+                    try:
+                        tx = int(to_zone.split('_')[1]); ty = int(to_zone.split('_')[2])
+                        tgt = (tx, ty)
+                    except Exception:
+                        tgt = None
+                elif act in ('pickup', 'drop'):
+                    # these act at robot's current location; check package conflicts
+                    pkg = params[1].lower() if len(params) > 1 else None
+                    tgt = r.position
+
+                # conflict checks against already selected actions this tick
+                conflict = False
+                if pkg and pkg in packages_touched:
+                    conflict = True
+                if tgt and tgt in occupied_targets:
+                    conflict = True
+                # swapping: if another selected action moves from our target to our source
+                for other_rid, (oact, oparams) in selected.items():
+                    if oact == 'move' and act == 'move':
+                        # get other move's source/target
+                        other_src = self.robots[other_rid].position
+                        try:
+                            otx = int(oparams[2].split('_')[1]); oty = int(oparams[2].split('_')[2])
+                            other_tgt = (otx, oty)
+                        except Exception:
+                            other_tgt = None
+                        # our tgt equals other's src and our src equals other's tgt => swap
+                        if tgt == other_src and src == other_tgt:
+                            conflict = True
+                            break
+
+                if conflict:
+                    # skip this robot this tick
+                    continue
+
+                # select this action
+                selected[rid] = (act, params)
+                if tgt:
+                    occupied_targets.add(tgt)
+                occupied_sources[rid] = src
+                if pkg:
+                    packages_touched.add(pkg)
+
+            if not selected:
+                # No actions could be scheduled this tick -> possible deadlock
+                print("Deadlock: no non-conflicting actions could be scheduled. Aborting.")
+                if self.gui:
+                    self.gui.update_info("Execution deadlock: check plan or environment.")
+                return False
+
+            # Execute selected actions (order doesn't matter since they are non-conflicting)
+            exec_results = {}
+            for rid, (act, params) in selected.items():
+                print(f"Parallel Step {step}: executing {act} for {rid} -> {params}")
+                if self.gui:
+                    # params may contain None; convert to strings safely
+                    params_str = ' '.join(str(p) for p in params)
+                    self.gui.update_info(f"Executing: {act} {params_str}")
+                res = self.execute_action(act, params)
+                exec_results[rid] = res
+                if not res:
+                    print(f"Action failed during parallel execution: {act} {params}")
+                    if self.gui:
+                        self.gui.update_info(f"Failure executing {act} {params}")
+                    return False
+
+            # dequeue executed actions
+            for rid in list(selected.keys()):
+                robot_actions[rid].popleft()
+
+            # redraw once per parallel tick
+            if self.gui:
+                self.gui.draw()
+                time.sleep(delay)
+
+        # success
+        print("Parallel plan executed successfully.")
+        if self.gui:
+            try:
+                self.gui.last_execution_success = True
+            except Exception:
+                pass
+            self.gui.update_info("Plan executed successfully (parallel).")
         return True

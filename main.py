@@ -393,7 +393,11 @@ def handle_gui_click(pos, gui, env, robots, packages):
             gui.update_info(f"Executing plan of {len(plan)} steps...")
             
             executor = PlanExecutor(env, robots, packages, gui)
-            executor.execute_plan(plan, delay=0.4)
+            # use parallel executor when available to run robots concurrently
+            if hasattr(executor, 'execute_plan_parallel'):
+                executor.execute_plan_parallel(plan, delay=0.4)
+            else:
+                executor.execute_plan(plan, delay=0.4)
             
         except Exception as e:
             gui.update_info(f"Execution Error: {e}")
