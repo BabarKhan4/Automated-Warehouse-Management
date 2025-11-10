@@ -1,0 +1,81 @@
+Plan Execution Error Fix + Reset Randomization Update
+
+Overview
+This PR introduces two targeted improvements:
+1. Fix: KeyError during plan execution caused by mismatched object ID casing.
+2. Feature: Automatic randomization on Reset after a successful plan execution.
+
+Fix: Plan Execution KeyError (e.g. "Error executing action ...: 'r2'")
+
+Root Cause
+Fast Downward outputs object names in lowercase (e.g. r2, p2), while the simulator stored them using uppercase IDs (R2, P2).
+Direct lookups failed due to case sensitivity, triggering KeyError exceptions during plan execution.
+
+Implemented Changes (plan_executor.py)
+- Normalized all plan parameters to lowercase
+
+  params = [p.lower() for p in parts[1:]]
+
+
+- Stored robots and packages using lowercase keys
+  self.robots = {r.id.lower(): r for r in robots}
+  self.packages = {p.id.lower(): p for p in packages}
+
+
+- Added safe, case-insensitive lookups with debug info
+
+
+  robot = self.robots.get(robot_id.lower())
+  if robot is None:
+      print(f"DEBUG: robot lookup failed for '{robot_id}'. Known keys: {list(self.robots.keys())}")
+      raise KeyError(robot_id)
+
+
+- Set GUI flag after successful plan execution
+  try:
+      self.gui.last_execution_success = True
+  except Exception:
+      pass
+
+Outcome
+Planner-produced lowercase IDs are now correctly matched, eliminating KeyError exceptions and improving debug traceability.
+
+2️⃣ Feature: Randomized Reset After Successful Plan
+
+Goal
+Automatically randomize robot and package positions when pressing Reset after a successful plan.
+This ensures each new run starts with a fresh, unique scenario.
+
+Implemented Changes (main.py)
+- Enhanced setup_scenario() to support randomization
+  def setup_scenario(randomize: bool = False, seed: int | None = None):
+      if randomize:
+          free_locs = env.get_locations()
+          robot_pos = random.choice(free_locs)
+          pkg_start = random.choice([loc for loc in free_locs if loc != robot_pos])
+          pkg_dest  = random.choice([loc for loc in free_locs if loc not in (robot_pos, pkg_start)])
+
+
+- Updated Reset logic to enable automatic randomization
+  should_randomize = gui.randomize_enabled or getattr(gui, 'last_execution_success', False)
+  reset_seed = None if should_randomize else gui.seed
+  new_env, new_robots, new_packages = setup_scenario(randomize=should_randomize, seed=reset_seed)
+  gui.last_execution_success = False
+
+Outcome
+- After a plan runs successfully, pressing Reset automatically generates a new randomized scenario.
+- Manual toggling or a “Randomize” button is no longer required.
+
+3️⃣ Cleanup (interface.py)
+- Removed on-screen “Randomize” button per UX request.
+- Randomization is now handled entirely through internal logic or CLI flag.
+
+Summary of Files Modified
+plan_executor.py — Lowercase normalization, safe lookups, debug print, success flag
+main.py — setup_scenario(randomize, seed) update, improved Reset logic
+interface.py — Removed “Randomize” button from GUI
+
+Results
+- No more KeyErrors from case mismatches.
+- Reset now reliably produces a new randomized environment after successful plan execution.
+- Cleaner interface with less manual toggling.
