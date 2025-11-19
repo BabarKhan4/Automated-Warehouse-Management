@@ -9,10 +9,56 @@ from environment import Environment
 from robot import Robot
 from package import Package
 from interface import GUI 
-from pddl_generator import extract_state_to_pddl
+from pddl_generator import extract_state_to_pddl, parse_connectivity_from_domain
 from pddl_generator import get_zone_name
 from planner_interface import call_planner
 from plan_executor import PlanExecutor, parse_plan
+
+
+def clear_problem_init(problem_path='problem.pddl'):
+    """Remove the first (:init ...) block from a problem PDDL file.
+
+    This is a simple text-based parenthesis matcher: it finds the first
+    occurrence of '(:init' and removes the balanced parentheses block that
+    follows. If no (:init is found the function does nothing.
+    """
+    try:
+        with open(problem_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except FileNotFoundError:
+        return
+
+    idx = content.find('(:init')
+    if idx == -1:
+        # nothing to clear
+        return
+
+    # find the matching closing parenthesis for this (:init block
+    i = idx
+    depth = 0
+    end_idx = -1
+    while i < len(content):
+        if content[i] == '(':
+            depth += 1
+        elif content[i] == ')':
+            depth -= 1
+            if depth == 0:
+                end_idx = i
+                break
+        i += 1
+
+    if end_idx == -1:
+        # malformed file; do not modify
+        return
+
+    # Replace the init block with a short comment placeholder
+    new_content = content[:idx] + ";; (:init removed by Reset — regenerate via generator)\n" + content[end_idx+1:]
+    try:
+        with open(problem_path, 'w', encoding='utf-8') as f:
+            f.write(new_content)
+    except Exception:
+        # fail silently; Reset should not crash the GUI
+        pass
 
 def reachable(start, goal, env):
     """Module-level reachability check (BFS) between two grid cells avoiding obstacles."""
@@ -38,8 +84,14 @@ def reachable(start, goal, env):
 def write_planner_problem(env, robots, packages, output_file):
     """Write a clean PDDL problem file (no template content) tailored to the current env.
 
-    This bypasses any on-disk template so the translator receives a consistent, correct
-    (:init ...) block that respects obstacles.
+    This writer also emits `(occupied <location>)` facts for every location
+    currently occupied by a robot so the planner can enforce collision
+    avoidance. The domain declares the `(occupied ?l - location)` predicate
+    and the `move` action updates occupied facts when robots move.
+
+    The goal is that planners will not generate plans that place two robots in
+    the same cell at the same time because moves require the destination to be
+    unoccupied.
     """
     with open(output_file, 'w') as f:
         f.write('(define (problem warehouse-delivery)\n')
@@ -60,6 +112,8 @@ def write_planner_problem(env, robots, packages, output_file):
         for r in robots:
             zx = get_zone_name(*r.position)
             f.write(f'  (at-robot {r.id.lower()} {zx})\n')
+            # mark occupied cells so planner enforces mutual exclusion
+            f.write(f'  (occupied {zx})\n')
             if r.can_carry_more():
                 f.write(f'  (robot-free {r.id.lower()})\n')
 
@@ -73,12 +127,21 @@ def write_planner_problem(env, robots, packages, output_file):
                 f.write(f'  (assigned {p.id.lower()} {assigned.lower()})\n')
 
         # connectivity only over non-obstacle locations
-        for x,y in env.get_locations():
-            cur = get_zone_name(x,y)
-            for dx,dy in [(0,1),(0,-1),(1,0),(-1,0)]:
-                nx,ny = x+dx, y+dy
-                if env.is_valid_position(nx,ny):
-                    f.write(f'  (connected {cur} {get_zone_name(nx,ny)})\n')
+        # Prefer connectivity documented in domain.pddl (comments) as the
+        # canonical source-of-truth for static connectivity. The parser will
+        # filter out any connections that reference obstacle cells in the
+        # current environment.
+        conns = parse_connectivity_from_domain('domain.pddl', env=env)
+        if conns:
+            for a, b in conns:
+                f.write(f'  (connected {a} {b})\n')
+        else:
+            for x,y in env.get_locations():
+                cur = get_zone_name(x,y)
+                for dx,dy in [(0,1),(0,-1),(1,0),(-1,0)]:
+                    nx,ny = x+dx, y+dy
+                    if env.is_valid_position(nx,ny):
+                        f.write(f'  (connected {cur} {get_zone_name(nx,ny)})\n')
 
         f.write(' )\n\n')
 
@@ -312,6 +375,7 @@ def setup_scenario(randomize: bool = False, seed: int | None = None):
 # --- BUTTON HANDLER (Complete Logic) ---
 def handle_gui_click(pos, gui, env, robots, packages):
     domain_file = "domain.pddl"
+    # Default extraction target: problem.pddl (template/problem snapshot)
     problem_file = "problem.pddl"
     plan_output_file = "solution.txt"
     
@@ -333,6 +397,35 @@ def handle_gui_click(pos, gui, env, robots, packages):
             gui.update_info("State extracted successfully to problem.pddl!")
         except Exception as e:
             gui.update_info(f"Error during extraction: {e}")
+        return
+    # Toggle overall mode between Random (auto) and Manual (click-to-place)
+    if 'Toggle Mode' in gui.buttons and gui.buttons['Toggle Mode'].collidepoint(pos):
+        # Ask for confirmation before switching global mode to avoid accidental flips
+        target = 'Manual' if gui.randomize_enabled else 'Random'
+        gui.pending_mode_confirm = True
+        gui.pending_mode_target = target
+        gui.update_info(f"Confirm switching to {target} mode...")
+        return
+    # If a confirmation modal is present, handle Yes/No clicks
+    if gui.pending_mode_confirm:
+        if 'ConfirmYes' in gui.buttons and gui.buttons['ConfirmYes'].collidepoint(pos):
+            # apply the pending mode switch
+            if gui.pending_mode_target == 'Manual':
+                gui.randomize_enabled = False
+                gui.dynamic_obstacles_enabled = True
+            else:
+                gui.randomize_enabled = True
+                gui.dynamic_obstacles_enabled = False
+            gui.update_info(f"Mode set to: {gui.pending_mode_target}")
+            gui.pending_mode_confirm = False
+            gui.pending_mode_target = None
+            return
+        if 'ConfirmNo' in gui.buttons and gui.buttons['ConfirmNo'].collidepoint(pos):
+            gui.pending_mode_confirm = False
+            gui.pending_mode_target = None
+            gui.update_info("Mode switch cancelled")
+            return
+    # (Redundant toggle button removed)
             
     # --- 2. PLANNING LOGIC ---
     elif 'Plan' in gui.buttons and gui.buttons['Plan'].collidepoint(pos):
@@ -376,12 +469,26 @@ def handle_gui_click(pos, gui, env, robots, packages):
             return
 
         gui.update_info("Calling planner (Fast Downward)...")
-
-        if call_planner(domain_file, gen_problem, plan_output_file):
-            gui.update_info(f"Plan found! Ready to execute.")
-        else:
-            gui.update_info("Planning failed (No solution found or error).")
-            
+        try:
+            found = call_planner(domain_file, gen_problem, plan_output_file)
+            if found:
+                gui.update_info(f"Plan found! Ready to execute.")
+            else:
+                gui.update_info("Planning failed (No solution found or error).")
+        finally:
+            # cleanup the generated problem file to avoid clutter.
+            # Keep it only if a GUI flag `keep_problem` is set (for debugging).
+            try:
+                keep = getattr(gui, 'keep_problem', False)
+                if not keep and os.path.exists(gen_problem):
+                    os.remove(gen_problem)
+            except Exception:
+                # ignore cleanup errors but log to GUI
+                try:
+                    gui.update_info("Note: failed to remove temporary problem file.")
+                except Exception:
+                    pass
+        return
     # --- 3. EXECUTE PLAN LOGIC ---
     elif 'Execute Plan' in gui.buttons and gui.buttons['Execute Plan'].collidepoint(pos):
         try:
@@ -424,7 +531,45 @@ def handle_gui_click(pos, gui, env, robots, packages):
             gui.last_execution_success = False
         except Exception:
             pass
+        # Clean up any lingering (:init ...) block from the repository template
+        # so problem.pddl doesn't retain a stale initial-state between runs.
+        try:
+            # If we now write extracted state into domain.pddl, clear any lingering
+            # (:init ...) block there as well to avoid stale initial states.
+            clear_problem_init(problem_file)
+        except Exception:
+            pass
         gui.update_info("Simulation reset to initial state.")
+        return
+
+    # If dynamic obstacle placement is enabled and the click is inside the grid,
+    # toggle obstacle presence at the clicked cell. Clicking on occupied cells
+    # (robots/packages) will be rejected to avoid inconsistent states.
+    try:
+        # pixel bounds check
+        gx = gui.grid_width
+        gy = gui.grid_height
+        px, py = pos
+        if 0 <= px < gx and 0 <= py < gy and getattr(gui, 'dynamic_obstacles_enabled', False):
+            cell_x = px // gui.cell_size
+            cell_y = gui.environment.height - 1 - (py // gui.cell_size)
+            # don't toggle obstacle on a robot or package
+            occupied_by_robot = any(r.position == (cell_x, cell_y) for r in robots)
+            occupied_by_pkg = any((not p.is_carried and p.position == (cell_x, cell_y)) for p in packages)
+            if occupied_by_robot or occupied_by_pkg:
+                gui.update_info("Cannot place obstacle: cell occupied by robot or package")
+                return
+            if gui.environment.is_obstacle(cell_x, cell_y):
+                gui.environment.obstacles.discard((cell_x, cell_y))
+                gui.update_info(f"Removed obstacle at {(cell_x, cell_y)}")
+            else:
+                gui.environment.add_obstacle(cell_x, cell_y)
+                gui.update_info(f"Added obstacle at {(cell_x, cell_y)}")
+    except Exception as e:
+        try:
+            gui.update_info(f"Error toggling obstacle: {e}")
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
